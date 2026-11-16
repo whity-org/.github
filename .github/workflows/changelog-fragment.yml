@@ -1,0 +1,57 @@
+# Reusable changelog-fragment check for Whity repositories (WHIT-1059, WHIT-1057).
+#
+# Checks the calling repository's changelog.d/ with the one copy of the tool,
+# whity-core's scripts/changelog-assemble.php (run with --root). No repository
+# keeps its own copy.
+#
+#   jobs:
+#     changelog:
+#       uses: whity-org/.github/.github/workflows/changelog-fragment.yml@main
+name: Changelog fragments
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        description: Name shown for the job.
+        type: string
+        default: Changelog fragments
+      working-directory:
+        description: The folder holding changelog.d/ and CHANGELOG.md.
+        type: string
+        default: '.'
+      tool-ref:
+        description: The whity-core branch the tool is taken from.
+        type: string
+        default: develop
+
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    name: ${{ inputs.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: repo
+      - name: Take the changelog tool from whity-core
+        uses: actions/checkout@v7
+        with:
+          repository: whity-org/whity-core
+          ref: ${{ inputs.tool-ref }}
+          sparse-checkout: |
+            scripts/changelog-assemble.php
+            scripts/lib/changelog-fragments.php
+          sparse-checkout-cone-mode: false
+          path: whity-changelog-tool
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+      - name: Check the fragments
+        env:
+          ROOT: ${{ github.workspace }}/repo/${{ inputs.working-directory }}
+        run: php whity-changelog-tool/scripts/changelog-assemble.php --check "--root=$ROOT"
