@@ -1,0 +1,215 @@
+# Reusable PHP test job for Whity repositories (WHIT-1059).
+#
+# Call it from a job in your own workflow:
+#
+#   jobs:
+#     sqlite:
+#       uses: whity-org/.github/.github/workflows/php-tests.yml@main
+#       with:
+#         setup: |
+#           cp .env.example .env
+#           php artisan key:generate --ansi
+#         test-command: php artisan test --without-tty
+#
+# With `postgres: true` the job runs beside a PostgreSQL service on
+# 127.0.0.1:5432; pass the connection settings your tests read through `env`.
+#
+# PHP: setup-php installs the newest 8.4 patch, and the job fails if that is
+# older than `php-floor` (8.4.27 carries the fixes for CVE-2026-109618 and
+# CVE-2026-109619; never test on anything older).
+name: PHP tests
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        description: Name shown for the job.
+        type: string
+        default: Tests
+      php-version:
+        description: PHP minor version for setup-php.
+        type: string
+        default: '8.4'
+      php-floor:
+        description: The oldest PHP patch the job accepts.
+        type: string
+        default: '8.4.27'
+      extensions:
+        description: PHP extensions for setup-php.
+        type: string
+        default: mbstring, pdo_sqlite, pdo_pgsql, pgsql, zip, pcntl, sodium
+      checkout-path:
+        description: Where the calling repository is checked out (for layouts like ../whity-core/sdk).
+        type: string
+        default: '.'
+      working-directory:
+        description: Where composer and the tests run, relative to the workspace.
+        type: string
+        default: '.'
+      core-sdk:
+        description: Also check out whity-org/whity-core at ./whity-core (for a path repository on its sdk).
+        type: boolean
+        default: false
+      core-ref:
+        description: The whity-core branch to check out.
+        type: string
+        default: develop
+      core-sparse:
+        description: Paths of whity-core to check out; empty for all of it.
+        type: string
+        default: sdk
+      composer-args:
+        description: Arguments for composer install.
+        type: string
+        default: --no-interaction --no-progress --prefer-dist
+      setup:
+        description: Shell commands run after composer install.
+        type: string
+        default: ''
+      test-command:
+        description: The test command.
+        type: string
+        default: vendor/bin/phpunit
+      phpstan:
+        description: Also run PHPStan.
+        type: boolean
+        default: false
+      phpstan-command:
+        description: The PHPStan command.
+        type: string
+        default: vendor/bin/phpstan analyse --no-progress
+      env:
+        description: KEY=VALUE lines added to the job's environment.
+        type: string
+        default: ''
+      postgres:
+        description: Run beside a PostgreSQL service on 127.0.0.1:5432.
+        type: boolean
+        default: false
+      postgres-image:
+        type: string
+        default: postgres:15
+      postgres-db:
+        type: string
+        default: test
+      postgres-user:
+        type: string
+        default: test
+      postgres-password:
+        type: string
+        default: ci-only-not-a-secret
+      timeout-minutes:
+        type: number
+        default: 30
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: ${{ inputs.name }}
+    if: ${{ !inputs.postgres }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: ${{ inputs.checkout-path }}
+      - name: Check out the whity-core SDK alongside
+        if: ${{ inputs.core-sdk }}
+        uses: actions/checkout@v7
+        with:
+          repository: whity-org/whity-core
+          ref: ${{ inputs.core-ref }}
+          sparse-checkout: ${{ inputs.core-sparse }}
+          path: whity-core
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          extensions: ${{ inputs.extensions }}
+          coverage: none
+      - name: PHP is at least ${{ inputs.php-floor }}
+        env:
+          FLOOR: ${{ inputs.php-floor }}
+        run: |
+          php -r 'echo PHP_VERSION, PHP_EOL; exit(version_compare(PHP_VERSION, getenv("FLOOR"), ">=") ? 0 : 1);'
+      - name: Environment
+        if: ${{ inputs.env != '' }}
+        env:
+          LINES: ${{ inputs.env }}
+        run: printf '%s\n' "$LINES" | grep -v '^[[:space:]]*$' >> "$GITHUB_ENV"
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: composer install ${{ inputs.composer-args }}
+      - name: Set up
+        if: ${{ inputs.setup != '' }}
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.setup }}
+      - name: PHPStan
+        if: ${{ inputs.phpstan }}
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.phpstan-command }}
+      - name: Tests
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.test-command }}
+
+  tests-postgres:
+    name: ${{ inputs.name }}
+    if: ${{ inputs.postgres }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    services:
+      postgres:
+        image: ${{ inputs.postgres-image }}
+        env:
+          POSTGRES_DB: ${{ inputs.postgres-db }}
+          POSTGRES_USER: ${{ inputs.postgres-user }}
+          POSTGRES_PASSWORD: ${{ inputs.postgres-password }}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ${{ inputs.postgres-user }} -d ${{ inputs.postgres-db }}"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: ${{ inputs.checkout-path }}
+      - name: Check out the whity-core SDK alongside
+        if: ${{ inputs.core-sdk }}
+        uses: actions/checkout@v7
+        with:
+          repository: whity-org/whity-core
+          ref: ${{ inputs.core-ref }}
+          sparse-checkout: ${{ inputs.core-sparse }}
+          path: whity-core
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          extensions: ${{ inputs.extensions }}
+          coverage: none
+      - name: PHP is at least ${{ inputs.php-floor }}
+        env:
+          FLOOR: ${{ inputs.php-floor }}
+        run: |
+          php -r 'echo PHP_VERSION, PHP_EOL; exit(version_compare(PHP_VERSION, getenv("FLOOR"), ">=") ? 0 : 1);'
+      - name: The PostgreSQL driver is loaded
+        run: |
+          php -r 'exit(in_array("pgsql", PDO::getAvailableDrivers(), true) ? 0 : 1);'
+      - name: Environment
+        if: ${{ inputs.env != '' }}
+        env:
+          LINES: ${{ inputs.env }}
+        run: printf '%s\n' "$LINES" | grep -v '^[[:space:]]*$' >> "$GITHUB_ENV"
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: composer install ${{ inputs.composer-args }}
+      - name: Set up
+        if: ${{ inputs.setup != '' }}
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.setup }}
+      - name: PHPStan
+        if: ${{ inputs.phpstan }}
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.phpstan-command }}
+      - name: Tests
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.test-command }}
